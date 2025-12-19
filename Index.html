@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>AR Art Studio</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        /* タッチ操作時のスクロール防止など、アプリらしい挙動の設定 */
+        body {
+            overscroll-behavior: none;
+            touch-action: none;
+            background-color: #000;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        
+        /* クロスヘアカーソル */
+        .cursor-draw {
+            cursor: crosshair;
+        }
+
+        /* レンジスライダーのカスタマイズ */
+        input[type=range] {
+            -webkit-appearance: none;
+            background: transparent;
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 14px;
+            width: 14px;
+            border-radius: 50%;
+            background: #ffffff;
+            margin-top: -5px;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.3);
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 4px;
+            background: rgba(255, 255, 255, 0.3);
+            border-radius: 2px;
+        }
+        
+        /* ツールバーの非表示アニメーション */
+        .tools-panel {
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .tools-hidden {
+            transform: translateY(110%);
+        }
+
+        /* カラーピッカーのスタイル調整 */
+        input[type="color"] {
+            -webkit-appearance: none;
+            border: none;
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            overflow: hidden;
+            padding: 0;
+            background: none;
+        }
+        input[type="color"]::-webkit-color-swatch-wrapper {
+            padding: 0;
+        }
+        input[type="color"]::-webkit-color-swatch {
+            border: 2px solid white;
+            border-radius: 50%;
+        }
+    </style>
+</head>
+<body class="h-[100dvh] w-full overflow-hidden relative text-white">
+
+    <!-- ビデオレイヤー（最背面） -->
+    <video id="video" autoplay playsinline muted class="absolute inset-0 w-full h-full object-cover z-0"></video>
+
+    <!-- アップロード画像レイヤー（中間） -->
+    <div id="image-container" class="absolute inset-0 flex items-center justify-center pointer-events-none z-10 hidden">
+        <img id="overlay-image" src="" alt="Overlay" class="max-w-[80%] max-h-[80%] object-contain opacity-70 transform transition-transform duration-75">
+    </div>
+
+    <!-- お絵描きキャンバス（前面） -->
+    <canvas id="canvas" class="absolute inset-0 z-20 cursor-draw touch-none"></canvas>
+
+    <!-- UI: トップバー -->
+    <div class="absolute top-0 left-0 right-0 z-30 p-2 flex justify-between items-center bg-gradient-to-b from-black/60 to-transparent pointer-events-none">
+        <div class="pointer-events-auto pl-2">
+            <h1 class="text-lg font-bold tracking-wider drop-shadow-md"><i class="fas fa-paint-brush text-pink-500 mr-2"></i>AR Art Studio</h1>
+        </div>
+        
+        <!-- カメラ切り替え & 画像アップロード -->
+        <div class="flex gap-2 pointer-events-auto">
+            <button id="btn-flip-camera" class="w-8 h-8 rounded-full bg-white/20 backdrop-blur-md flex items-center justify-center active:scale-95 transition-transform" title="カメラ切り替え">
+                <i class="fas fa-camera-rotate text-white text-sm"></i>
+            </button>
+            <label for="file-upload" class="w-8 h-8 rounded-full bg-white/20 backdrop-blur-md flex items-center justify-center cursor-pointer active:scale-95 transition-transform" title="画像を読み込む">
+                <i class="fas fa-image text-white text-sm"></i>
+                <input type="file" id="file-upload" accept="image/*" class="hidden">
+            </label>
+        </div>
+    </div>
+
+    <!-- 画像調整コントロール（画像がある時のみ表示） -->
+    <div id="image-controls" class="absolute top-14 right-2 z-30 flex flex-col gap-2 hidden pointer-events-auto bg-black/40 backdrop-blur-md p-2 rounded-lg border border-white/10">
+        <div class="text-[10px] text-center font-bold mb-0">画像設定</div>
+        
+        <div class="flex flex-col gap-0.5">
+            <label class="text-[9px] text-gray-300">透明度</label>
+            <input type="range" id="img-opacity" min="0" max="1" step="0.1" value="0.7" class="w-24">
+        </div>
+        
+        <div class="flex flex-col gap-0.5">
+            <label class="text-[9px] text-gray-300">サイズ</label>
+            <input type="range" id="img-scale" min="0.1" max="3" step="0.1" value="1" class="w-24">
+        </div>
+
+        <button id="btn-remove-img" class="text-[10px] bg-red-500/80 hover:bg-red-600 text-white py-1 px-2 rounded mt-1">
+            削除
+        </button>
+    </div>
+
+    <!-- UI: ボトムツールバー -->
+    <div id="toolbar" class="tools-panel absolute bottom-0 left-0 right-0 z-30 bg-black/60 backdrop-blur-lg border-t border-white/10 pb-3 pt-2 px-3 rounded-t-xl pointer-events-auto">
+        
+        <!-- 描画ツール -->
+        <div class="flex flex-col gap-2 max-w-lg mx-auto">
+            
+            <!-- 上段：ブラシ設定 -->
+            <div class="flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <!-- カラーピッカー -->
+                    <div class="relative group">
+                        <input type="color" id="color-picker" value="#ff0055">
+                    </div>
+
+                    <!-- ブラシサイズ -->
+                    <div class="flex flex-col w-24">
+                        <input type="range" id="brush-size" min="1" max="50" value="5">
+                    </div>
+                </div>
+
+                <!-- ツール切り替え -->
+                <div class="flex bg-white/10 rounded-full p-0.5">
+                    <button id="btn-brush" class="p-1.5 rounded-full bg-white text-black transition-colors w-8 h-8 flex items-center justify-center">
+                        <i class="fas fa-pencil-alt text-sm"></i>
+                    </button>
+                    <button id="btn-eraser" class="p-1.5 rounded-full text-white hover:bg-white/20 transition-colors w-8 h-8 flex items-center justify-center">
+                        <i class="fas fa-eraser text-sm"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- 下段：アクションボタン -->
+            <div class="flex items-center justify-between mt-0">
+                <button id="btn-clear" class="text-xs text-gray-300 hover:text-white flex items-center gap-1 px-2 py-1.5 rounded-lg hover:bg-white/10 transition">
+                    <i class="fas fa-trash-alt"></i> 全消去
+                </button>
+
+                <!-- シャッターボタン -->
+                <button id="btn-capture" class="bg-gradient-to-r from-pink-500 to-purple-600 hover:from-pink-600 hover:to-purple-700 text-white px-4 py-1.5 rounded-full font-bold shadow-lg transform active:scale-95 transition-all flex items-center gap-2">
+                    <i class="fas fa-camera text-sm"></i>
+                    <span class="text-xs">保存</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- シャッターエフェクト（フラッシュ） -->
+    <div id="flash" class="absolute inset-0 bg-white pointer-events-none opacity-0 z-50 transition-opacity duration-200"></div>
+
+    <script>
+        // DOM要素の取得
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const colorPicker = document.getElementById('color-picker');
+        const brushSizeInput = document.getElementById('brush-size');
+        const btnBrush = document.getElementById('btn-brush');
+        const btnEraser = document.getElementById('btn-eraser');
+        const btnClear = document.getElementById('btn-clear');
+        const btnCapture = document.getElementById('btn-capture');
+        const btnFlipCamera = document.getElementById('btn-flip-camera');
+        const fileUpload = document.getElementById('file-upload');
+        const overlayContainer = document.getElementById('image-container');
+        const overlayImage = document.getElementById('overlay-image');
+        const imgOpacityInput = document.getElementById('img-opacity');
+        const imgScaleInput = document.getElementById('img-scale');
+        const imgControls = document.getElementById('image-controls');
+        const btnRemoveImg = document.getElementById('btn-remove-img');
+        const flash = document.getElementById('flash');
+
+        // 状態変数
+        let isDrawing = false;
+        let lastX = 0;
+        let lastY = 0;
+        let currentMode = 'brush'; // 'brush' or 'eraser'
+        let currentColor = colorPicker.value;
+        let currentSize = brushSizeInput.value;
+        let facingMode = 'environment'; // 'user' (インカメ) or 'environment' (外カメ)
+        let stream = null;
+
+        // キャンバスの初期設定
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            // リサイズすると内容は消えるので再描画が必要だが、
+            // お絵かきアプリとしては「消える」か「保存しておく」かの選択。
+            // 簡易化のためリサイズ時はクリアされる仕様としますが、
+            // 実際はtemp canvasに退避するロジックを入れると良い。
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        // --- カメラ機能 ---
+        async function initCamera() {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+            }
+
+            try {
+                const constraints = {
+                    audio: false,
+                    video: {
+                        facingMode: facingMode
+                    }
+                };
+                stream = await navigator.mediaDevices.getUserMedia(constraints);
+                video.srcObject = stream;
+                // インカメラの場合はミラー表示にするなどのCSS切り替え
+                if (facingMode === 'user') {
+                    video.style.transform = 'scaleX(-1)';
+                } else {
+                    video.style.transform = 'scaleX(1)';
+                }
+            } catch (err) {
+                console.error("Camera Error:", err);
+                alert("カメラにアクセスできませんでした。権限を確認してください。");
+            }
+        }
+
+        // カメラ切り替えボタン
+        btnFlipCamera.addEventListener('click', () => {
+            facingMode = facingMode === 'user' ? 'environment' : 'user';
+            initCamera();
+        });
+
+        // 初期化
+        initCamera();
+
+        // --- お絵描きロジック ---
+        
+        // 座標取得（タッチ・マウス共通化）
+        function getPos(e) {
+            if (e.touches && e.touches.length > 0) {
+                return {
+                    x: e.touches[0].clientX,
+                    y: e.touches[0].clientY
+                };
+            }
+            return {
+                x: e.clientX,
+                y: e.clientY
+            };
+        }
+
+        function startDrawing(e) {
+            isDrawing = true;
+            const pos = getPos(e);
+            lastX = pos.x;
+            lastY = pos.y;
+            // 点を描画（クリックしただけの場合）
+            draw(e);
+        }
+
+        function stopDrawing() {
+            isDrawing = false;
+            ctx.beginPath(); // パスをリセット
+        }
+
+        function draw(e) {
+            if (!isDrawing) return;
+            // スクロール防止（特にスマホで重要）
+            // e.preventDefault(); // ここでpreventするとUI操作に影響が出ることがあるので、touch-action: noneをCSSで指定済み
+
+            const pos = getPos(e);
+
+            ctx.lineWidth = currentSize;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+
+            if (currentMode === 'eraser') {
+                ctx.globalCompositeOperation = 'destination-out'; // 透明にする
+                ctx.strokeStyle = 'rgba(0,0,0,1)'; // 色は何でも良い
+            } else {
+                ctx.globalCompositeOperation = 'source-over'; // 通常描画
+                ctx.strokeStyle = currentColor;
+            }
+
+            ctx.beginPath();
+            ctx.moveTo(lastX, lastY);
+            ctx.lineTo(pos.x, pos.y);
+            ctx.stroke();
+
+            lastX = pos.x;
+            lastY = pos.y;
+        }
+
+        // イベントリスナー登録
+        canvas.addEventListener('mousedown', startDrawing);
+        canvas.addEventListener('mousemove', draw);
+        canvas.addEventListener('mouseup', stopDrawing);
+        canvas.addEventListener('mouseout', stopDrawing);
+
+        canvas.addEventListener('touchstart', (e) => {
+            // e.preventDefault(); // UI以外の領域のみpreventしたいが、canvasが全面なのでOK
+            startDrawing(e);
+        }, { passive: false });
+        canvas.addEventListener('touchmove', (e) => {
+            e.preventDefault(); // キャンバス上のスワイプでスクロールさせない
+            draw(e);
+        }, { passive: false });
+        canvas.addEventListener('touchend', stopDrawing);
+
+        // --- ツール設定 ---
+
+        colorPicker.addEventListener('input', (e) => {
+            currentColor = e.target.value;
+            if (currentMode === 'eraser') setMode('brush'); // 色を変えたらブラシに戻す
+        });
+
+        brushSizeInput.addEventListener('input', (e) => {
+            currentSize = e.target.value;
+        });
+
+        function setMode(mode) {
+            currentMode = mode;
+            if (mode === 'brush') {
+                btnBrush.classList.add('bg-white', 'text-black');
+                btnBrush.classList.remove('text-white', 'hover:bg-white/20');
+                btnEraser.classList.remove('bg-white', 'text-black');
+                btnEraser.classList.add('text-white', 'hover:bg-white/20');
+            } else {
+                btnEraser.classList.add('bg-white', 'text-black');
+                btnEraser.classList.remove('text-white', 'hover:bg-white/20');
+                btnBrush.classList.remove('bg-white', 'text-black');
+                btnBrush.classList.add('text-white', 'hover:bg-white/20');
+            }
+        }
+
+        btnBrush.addEventListener('click', () => setMode('brush'));
+        btnEraser.addEventListener('click', () => setMode('eraser'));
+
+        btnClear.addEventListener('click', () => {
+            if(confirm('キャンバスを全消去しますか？')) {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+            }
+        });
+
+        // --- 画像アップロード & 調整 ---
+        fileUpload.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = (evt) => {
+                    overlayImage.src = evt.target.result;
+                    overlayContainer.classList.remove('hidden');
+                    imgControls.classList.remove('hidden');
+                };
+                reader.readAsDataURL(file);
+            }
+        });
+
+        imgOpacityInput.addEventListener('input', (e) => {
+            overlayImage.style.opacity = e.target.value;
+        });
+
+        imgScaleInput.addEventListener('input', (e) => {
+            overlayImage.style.transform = `scale(${e.target.value})`;
+        });
+
+        btnRemoveImg.addEventListener('click', () => {
+            overlayImage.src = '';
+            overlayContainer.classList.add('hidden');
+            imgControls.classList.add('hidden');
+            fileUpload.value = ''; // リセット
+        });
+
+        // --- 保存 (Capture) 機能 ---
+        btnCapture.addEventListener('click', () => {
+            // フラッシュエフェクト
+            flash.style.opacity = 1;
+            setTimeout(() => flash.style.opacity = 0, 100);
+
+            // 合成用の一時キャンバスを作成
+            const saveCanvas = document.createElement('canvas');
+            saveCanvas.width = canvas.width;
+            saveCanvas.height = canvas.height;
+            const saveCtx = saveCanvas.getContext('2d');
+
+            // 1. ビデオを描画 (object-coverの再現計算)
+            // ビデオのアスペクト比とキャンバスのアスペクト比を比較してトリミング位置を計算
+            const vRatio = video.videoWidth / video.videoHeight;
+            const cRatio = saveCanvas.width / saveCanvas.height;
+            let sx, sy, sWidth, sHeight;
+
+            if (cRatio > vRatio) {
+                sWidth = video.videoWidth;
+                sHeight = video.videoWidth / cRatio;
+                sx = 0;
+                sy = (video.videoHeight - sHeight) / 2;
+            } else {
+                sWidth = video.videoHeight * cRatio;
+                sHeight = video.videoHeight;
+                sx = (video.videoWidth - sWidth) / 2;
+                sy = 0;
+            }
+
+            saveCtx.save();
+            if (facingMode === 'user') {
+                // インカメの場合は左右反転して描画
+                saveCtx.translate(saveCanvas.width, 0);
+                saveCtx.scale(-1, 1);
+            }
+            saveCtx.drawImage(video, sx, sy, sWidth, sHeight, 0, 0, saveCanvas.width, saveCanvas.height);
+            saveCtx.restore();
+
+            // 2. アップロード画像を描画（もしあれば）
+            if (!overlayContainer.classList.contains('hidden') && overlayImage.src) {
+                saveCtx.save();
+                saveCtx.globalAlpha = parseFloat(imgOpacityInput.value);
+                
+                // 画像のサイズと位置の計算（CSSのobject-containとtransform scaleを再現）
+                const scale = parseFloat(imgScaleInput.value);
+                
+                // 画像の元の比率
+                const imgRatio = overlayImage.naturalWidth / overlayImage.naturalHeight;
+                
+                // 描画先の基準ボックス（80% width/height）
+                const maxWidth = saveCanvas.width * 0.8;
+                const maxHeight = saveCanvas.height * 0.8;
+                
+                let drawW = maxWidth;
+                let drawH = drawW / imgRatio;
+
+                if (drawH > maxHeight) {
+                    drawH = maxHeight;
+                    drawW = drawH * imgRatio;
+                }
+
+                // スケール適用
+                drawW *= scale;
+                drawH *= scale;
+
+                const dx = (saveCanvas.width - drawW) / 2;
+                const dy = (saveCanvas.height - drawH) / 2;
+
+                saveCtx.drawImage(overlayImage, dx, dy, drawW, drawH);
+                saveCtx.restore();
+            }
+
+            // 3. お絵描きキャンバスを重ねる
+            saveCtx.drawImage(canvas, 0, 0);
+
+            // 4. ダウンロード処理
+            const dataURL = saveCanvas.toDataURL('image/png');
+            const link = document.createElement('a');
+            const date = new Date();
+            const timestamp = `${date.getFullYear()}${date.getMonth()+1}${date.getDate()}_${date.getHours()}${date.getMinutes()}${date.getSeconds()}`;
+            link.download = `AR_Art_${timestamp}.png`;
+            link.href = dataURL;
+            link.click();
+        });
+
+    </script>
+</body>
+</html>
